@@ -1,0 +1,15 @@
+# Binaires et distribution
+SwitchRPC
+dist/
+*.dmg
+*.app
+*.o
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Données locales de test (stockées en réalité dans ~/Library/Application Support/SwitchRPC)
+covers/
+*.json
