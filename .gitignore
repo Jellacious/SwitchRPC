@@ -1,6 +1,7 @@
 # Binaires et distribution
 SwitchRPC
 build-dmg.sh
+build-icon.swift
 dist/
 *.dmg
 *.app

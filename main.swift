@@ -1,6 +1,7 @@
 import Cocoa
 import SwiftUI
 import Foundation
+import Combine
 
 // MARK: - Language Localization (Default: English)
 enum AppLanguage: String, Codable, CaseIterable, Identifiable {
@@ -785,6 +786,14 @@ class AppState: ObservableObject {
     @Published var startTime: Int = Int(Date().timeIntervalSince1970)
     @Published var errorMessage: String? = nil
     
+    private var cancellables = Set<AnyCancellable>()
+    
+    init() {
+        store.objectWillChange.sink { [weak self] _ in
+            self?.objectWillChange.send()
+        }.store(in: &cancellables)
+    }
+    
     func selectGame(_ game: SavedGame) {
         if currentGame?.id == game.id {
             stop()
@@ -830,11 +839,11 @@ class AppState: ObservableObject {
 // MARK: - Main Content View
 struct ContentView: View {
     @ObservedObject var state = AppState.shared
+    @ObservedObject var store = AppState.shared.store
     @State private var showManageModal: Bool = false
     @State private var editingGame: SavedGame? = nil
     
     var body: some View {
-        let store = state.store
         VStack(spacing: 0) {
             // Header
             HStack(spacing: 12) {
@@ -842,7 +851,7 @@ struct ContentView: View {
                     Circle()
                         .fill(Color(red: 0.9, green: 0.2, blue: 0.2))
                         .frame(width: 14, height: 14)
-                    Text("Discord Rich Presence")
+                    Text("SwitchRPC")
                         .font(.system(size: 15, weight: .bold, design: .rounded))
                 }
                 
@@ -1585,6 +1594,9 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
     func applicationDidFinishLaunching(_ notification: Notification) {
         AppDelegate.shared = self
         NSApp.setActivationPolicy(.regular)
+        if let icon = Bundle.main.image(forResource: "AppIcon") {
+            NSApp.applicationIconImage = icon
+        }
         setupMainMenu()
         updateMenuBarVisibility()
         
@@ -1616,7 +1628,7 @@ class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSWindowDele
             )
             win.isReleasedWhenClosed = false
             win.center()
-            win.title = "Nintendo Switch Menu - Discord RPC"
+            win.title = "SwitchRPC"
             win.contentView = NSHostingView(rootView: contentView)
             win.delegate = self
             self.window = win
