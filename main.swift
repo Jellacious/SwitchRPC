@@ -477,8 +477,7 @@ class GameStore: ObservableObject {
             self.apps = la
         } else {
             let defaultSwitch = DiscordApp(name: "Nintendo Switch", clientId: "1560034774049882124")
-            let defaultPlex = DiscordApp(name: "Plex", clientId: "1560038176628805819")
-            self.apps = [defaultSwitch, defaultPlex]
+            self.apps = [defaultSwitch]
         }
         
         if let lg = loadedGames {
