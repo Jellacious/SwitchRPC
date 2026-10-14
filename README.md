@@ -41,8 +41,8 @@ cd SwitchRPC
 # Compile binary
 swiftc -O main.swift -o SwitchRPC
 
-# (Optional) Build standalone .dmg
-./build-dmg.sh
+# Run application
+./SwitchRPC
 ```
 
 ---

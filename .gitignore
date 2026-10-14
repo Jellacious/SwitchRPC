@@ -1,5 +1,6 @@
 # Binaires et distribution
 SwitchRPC
+build-dmg.sh
 dist/
 *.dmg
 *.app
