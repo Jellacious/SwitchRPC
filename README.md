@@ -1,6 +1,6 @@
-# SwitchRPC 🎮✨
+# SwitchRPC 🎮
 
-> A native macOS Discord Rich Presence manager inspired by the Nintendo Switch home menu.
+> A native macOS Discord Rich Presence manager.
 
 ![macOS](https://img.shields.io/badge/macOS-12.0+-blue?style=flat-square&logo=apple)
 ![Swift](https://img.shields.io/badge/Swift-5.9+-orange?style=flat-square&logo=swift)
@@ -10,19 +10,17 @@
 
 ## 🌟 Features
 
-- **Nintendo Switch UI**: Horizontal tile carousel with live preview, cover artwork, and status badges.
-- **Discord Rich Presence (IPC)**: Native Unix socket connection directly with Discord (no browser or heavy NodeJS dependencies required).
-- **Multiple Discord Apps**: Switch between custom titles (Nintendo Switch, Plex, Steam, etc.) or add your own Client IDs.
+- **Discord Rich Presence**: Native Unix socket connection directly with Discord.
+- **Multiple Discord Apps**: Switch between custom titles or add your own Client IDs.
 - **Menu Bar Companion**: Minimalist system tray status item with quick actions (`Play`, `Stop`, `Quit`) and background mode.
-- **Bilingual Support**: English & French interface with on-the-fly language switching.
-- **Automatic GitHub Update Checker**: Check for newer releases directly inside the app settings.
+- **Auto-start on Login**: Option to start automatically when logging in.
 
 ---
 
 ## 📥 Installation
 
 1. Download the latest `.dmg` from the **[Releases](https://github.com/Jellacious/SwitchRPC/releases)** page.
-2. Open `SwitchRPC-1.0.0.dmg`.
+2. Open `SwitchRPC-X.X.X.dmg`.
 3. Drag & drop **SwitchRPC.app** into your `/Applications` folder.
 4. Launch **SwitchRPC** from your Applications or Spotlight.
 
@@ -47,6 +45,5 @@ swiftc -O main.swift -o SwitchRPC
 
 ---
 
-## 👤 Author
-
-- **Jellacious** ([@Jellacious](https://github.com/Jellacious))
+Developed with ❤️ by [Jellacious](https://github.com/jellacious).
+Note : AI was used in this project.
