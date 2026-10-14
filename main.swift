@@ -480,33 +480,10 @@ class GameStore: ObservableObject {
             self.apps = [defaultSwitch, defaultPlex]
         }
         
-        if let lg = loadedGames, !lg.isEmpty {
+        if let lg = loadedGames {
             self.games = lg
         } else {
-            let defaultAppId = self.apps.first?.id ?? UUID()
-            self.games = [
-                SavedGame(
-                    name: "The Legend of Zelda: Tears of the Kingdom",
-                    status: "Dans les cieux d'Hyrule",
-                    imageUrl: "https://assets.nintendo.com/image/upload/f_auto/q_auto/v1/ncom/en_US/games/switch/t/the-legend-of-zelda-tears-of-the-kingdom-switch/hero",
-                    appId: defaultAppId,
-                    activityType: .playing
-                ),
-                SavedGame(
-                    name: "Super Mario Bros. Wonder",
-                    status: "En plein niveau",
-                    imageUrl: "https://assets.nintendo.com/image/upload/f_auto/q_auto/v1/ncom/en_US/games/switch/s/super-mario-bros-wonder-switch/hero",
-                    appId: defaultAppId,
-                    activityType: .playing
-                ),
-                SavedGame(
-                    name: "Mario Kart 8 Deluxe",
-                    status: "Course en ligne",
-                    imageUrl: "https://assets.nintendo.com/image/upload/f_auto/q_auto/v1/ncom/en_US/games/switch/m/mario-kart-8-deluxe-switch/hero",
-                    appId: defaultAppId,
-                    activityType: .playing
-                )
-            ]
+            self.games = []
             save()
         }
     }
@@ -947,7 +924,7 @@ struct ContentView: View {
                             }
                             
                             VStack(alignment: .leading, spacing: 3) {
-                                Text(L10n.tr("Add / Manage", "Ajouter / Gérer"))
+                                Text(store.games.isEmpty ? L10n.tr("Add your first game", "Ajouter un jeu") : L10n.tr("Add / Manage", "Ajouter / Gérer"))
                                     .font(.system(size: 12, weight: .semibold))
                                     .foregroundColor(.secondary)
                                     .frame(width: 160, alignment: .leading)
@@ -969,7 +946,7 @@ struct ContentView: View {
             
             // Footer Info
             HStack {
-                Text(L10n.tr("Click a cover to launch • Pencil icon to edit", "Clique sur une pochette pour lancer • Icône crayon pour modifier"))
+                Text(store.games.isEmpty ? L10n.tr("Click '+' to add your first game cover", "Cliquez sur '+' pour ajouter votre première jaquette") : L10n.tr("Click a cover to launch • Pencil icon to edit", "Clique sur une pochette pour lancer • Icône crayon pour modifier"))
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
