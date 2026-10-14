@@ -602,7 +602,37 @@ class DiscordIPC {
                     }
                 }
                 
-                if res == 0 {
+                if res != 0 {
+                    close(fd)
+                    continue
+                }
+                
+                // Test handshake directement sur ce socket
+                let handshake: [String: Any] = ["v": 1, "client_id": clientId]
+                guard let data = try? JSONSerialization.data(withJSONObject: handshake) else {
+                    close(fd)
+                    continue
+                }
+                
+                var op: UInt32 = 0
+                var len = UInt32(data.count)
+                var packet = Data()
+                packet.append(Data(bytes: &op, count: 4))
+                packet.append(Data(bytes: &len, count: 4))
+                packet.append(data)
+                
+                let writeRes = packet.withUnsafeBytes { ptr in
+                    Darwin.write(fd, ptr.baseAddress!, packet.count)
+                }
+                guard writeRes == packet.count else {
+                    close(fd)
+                    continue
+                }
+                
+                var header = [UInt8](repeating: 0, count: 8)
+                let bytesRead = Darwin.read(fd, &header, 8)
+                if bytesRead >= 8 {
+                    // Handshake validé avec succès sur ce socket !
                     connectedFd = fd
                     break
                 } else {
@@ -613,39 +643,11 @@ class DiscordIPC {
         }
         
         guard connectedFd >= 0 else {
-            return (false, L10n.tr("Discord is not running on your Mac. Please launch Discord first.", "Discord n'est pas ouvert sur votre Mac. Veuillez lancer Discord."))
+            return (false, L10n.tr("Cannot connect to Discord Rich Presence.", "Impossible de se connecter à Discord Rich Presence."))
         }
         
-        let fd = connectedFd
-        self.socketFd = fd
+        self.socketFd = connectedFd
         self.currentClientId = clientId
-        
-        let handshake: [String: Any] = ["v": 1, "client_id": clientId]
-        guard let data = try? JSONSerialization.data(withJSONObject: handshake) else {
-            close(fd)
-            self.socketFd = -1
-            return (false, L10n.tr("Discord handshake JSON error", "Erreur handshake JSON"))
-        }
-        
-        var op: UInt32 = 0
-        var len = UInt32(data.count)
-        var packet = Data()
-        packet.append(Data(bytes: &op, count: 4))
-        packet.append(Data(bytes: &len, count: 4))
-        packet.append(data)
-        
-        _ = packet.withUnsafeBytes { ptr in
-            Darwin.write(fd, ptr.baseAddress!, packet.count)
-        }
-        
-        var header = [UInt8](repeating: 0, count: 8)
-        let bytesRead = Darwin.read(fd, &header, 8)
-        if bytesRead < 8 {
-            close(fd)
-            self.socketFd = -1
-            return (false, L10n.tr("Discord handshake failed (Code 4001)", "Erreur handshake Discord (Code 4001)"))
-        }
-        
         self.isConnected = true
         return (true, nil)
     }
@@ -744,8 +746,9 @@ class DiscordIPC {
         }
     }
     
-    private func disconnectSync() {
-        if isConnected {
+    func clearActivity() {
+        queue.async { [weak self] in
+            guard let self = self, self.isConnected, self.socketFd >= 0 else { return }
             let clear: [String: Any] = [
                 "cmd": "SET_ACTIVITY",
                 "args": ["pid": ProcessInfo.processInfo.processIdentifier, "activity": NSNull()],
@@ -761,6 +764,31 @@ class DiscordIPC {
                 _ = packet.withUnsafeBytes { ptr in
                     Darwin.write(self.socketFd, ptr.baseAddress!, packet.count)
                 }
+                var resHeader = [UInt8](repeating: 0, count: 8)
+                _ = Darwin.read(self.socketFd, &resHeader, 8)
+            }
+        }
+    }
+    
+    private func disconnectSync() {
+        if isConnected && socketFd >= 0 {
+            let clear: [String: Any] = [
+                "cmd": "SET_ACTIVITY",
+                "args": ["pid": ProcessInfo.processInfo.processIdentifier, "activity": NSNull()],
+                "nonce": UUID().uuidString
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: clear) {
+                var op: UInt32 = 1
+                var len = UInt32(data.count)
+                var packet = Data()
+                packet.append(Data(bytes: &op, count: 4))
+                packet.append(Data(bytes: &len, count: 4))
+                packet.append(data)
+                _ = packet.withUnsafeBytes { ptr in
+                    Darwin.write(self.socketFd, ptr.baseAddress!, packet.count)
+                }
+                var resHeader = [UInt8](repeating: 0, count: 8)
+                _ = Darwin.read(self.socketFd, &resHeader, 8)
             }
             close(socketFd)
             socketFd = -1
@@ -831,7 +859,7 @@ class AppState: ObservableObject {
     func stop() {
         currentGame = nil
         errorMessage = nil
-        DiscordIPC.shared.disconnect()
+        DiscordIPC.shared.clearActivity()
     }
 }
 
