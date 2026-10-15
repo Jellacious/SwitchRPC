@@ -393,38 +393,21 @@ class UpdateChecker: ObservableObject {
     }
 }
 
-// MARK: - Game Search Item & Service (Nintendo & RAWG Multiplatform)
-enum SearchCatalogSource: String, CaseIterable, Identifiable {
-    case all = "all"
-    case nintendo = "nintendo"
-    
-    var id: String { rawValue }
-    
-    var label: String {
-        switch self {
-        case .all: return L10n.tr("🌐 All Platforms (PS, Xbox, PC...)", "🌐 Multiplateforme (PS, Xbox, PC...)")
-        case .nintendo: return L10n.tr("🔴 Nintendo eShop", "🔴 Nintendo eShop")
-        }
-    }
-}
-
-struct GameSearchItem: Identifiable, Hashable {
+// MARK: - Nintendo Search Service & Model
+struct NintendoGameItem: Identifiable, Hashable {
     let id: String
     let title: String
     let imageUrl: String
     let releaseDate: String?
-    let platforms: String?
 }
 
-class UnifiedGameSearchService: ObservableObject {
+class NintendoSearchService: ObservableObject {
     @Published var query: String = ""
-    @Published var source: SearchCatalogSource = .all
-    @Published var results: [GameSearchItem] = []
+    @Published var results: [NintendoGameItem] = []
     @Published var isLoading: Bool = false
     @Published var errorMessage: String? = nil
     
     private var searchWorkItem: DispatchWorkItem?
-    private static let rawgKey = "a02cf7bf9fe3406f91bd02c79f16a270"
     
     func onQueryChanged(_ newQuery: String) {
         searchWorkItem?.cancel()
@@ -445,23 +428,14 @@ class UnifiedGameSearchService: ObservableObject {
     
     func performSearch(_ text: String) {
         guard let encoded = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return }
+        let lang = L10n.lang == .french ? "fr" : "en"
+        let urlString = "https://searching.nintendo-europe.com/\(lang)/select?q=\(encoded)&fq=type:GAME%20AND%20system_type:nintendoswitch*&wt=json&rows=24"
+        guard let url = URL(string: urlString) else { return }
         
         DispatchQueue.main.async {
             self.isLoading = true
             self.errorMessage = nil
         }
-        
-        if source == .nintendo {
-            searchNintendo(encoded: encoded)
-        } else {
-            searchRAWG(encoded: encoded)
-        }
-    }
-    
-    private func searchNintendo(encoded: String) {
-        let lang = L10n.lang == .french ? "fr" : "en"
-        let urlString = "https://searching.nintendo-europe.com/\(lang)/select?q=\(encoded)&fq=type:GAME%20AND%20system_type:nintendoswitch*&wt=json&rows=24"
-        guard let url = URL(string: urlString) else { return }
         
         var request = URLRequest(url: url)
         request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
@@ -471,10 +445,12 @@ class UnifiedGameSearchService: ObservableObject {
             DispatchQueue.main.async {
                 guard let self = self else { return }
                 self.isLoading = false
+                
                 if let error = error {
                     self.errorMessage = error.localizedDescription
                     return
                 }
+                
                 guard let data = data,
                       let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                       let responseObj = json["response"] as? [String: Any],
@@ -483,7 +459,7 @@ class UnifiedGameSearchService: ObservableObject {
                     return
                 }
                 
-                var items: [GameSearchItem] = []
+                var items: [NintendoGameItem] = []
                 for doc in docs {
                     guard let title = doc["title"] as? String else { continue }
                     let rawImage = (doc["image_url_sq_s"] as? String)
@@ -491,68 +467,15 @@ class UnifiedGameSearchService: ObservableObject {
                         ?? (doc["image_url_h2x1_s"] as? String)
                         ?? (doc["image_url"] as? String)
                         ?? ""
+                    
                     let fsId = (doc["fs_id"] as? String) ?? UUID().uuidString
                     let prettyDate = doc["pretty_date_s"] as? String
                     
-                    items.append(GameSearchItem(
+                    items.append(NintendoGameItem(
                         id: fsId,
                         title: title,
                         imageUrl: rawImage,
-                        releaseDate: prettyDate,
-                        platforms: "Nintendo Switch"
-                    ))
-                }
-                self.results = items
-            }
-        }.resume()
-    }
-    
-    private func searchRAWG(encoded: String) {
-        let urlString = "https://api.rawg.io/api/games?search=\(encoded)&key=\(Self.rawgKey)&page_size=20"
-        guard let url = URL(string: urlString) else { return }
-        
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 8.0
-        
-        URLSession.shared.dataTask(with: request) { [weak self] data, _, error in
-            DispatchQueue.main.async {
-                guard let self = self else { return }
-                self.isLoading = false
-                if let error = error {
-                    self.errorMessage = error.localizedDescription
-                    return
-                }
-                guard let data = data,
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      let resultsArray = json["results"] as? [[String: Any]] else {
-                    self.errorMessage = L10n.tr("No results found", "Aucun résultat trouvé")
-                    return
-                }
-                
-                var items: [GameSearchItem] = []
-                for g in resultsArray {
-                    guard let title = g["name"] as? String else { continue }
-                    let rawImage = g["background_image"] as? String ?? ""
-                    let gid = String(describing: g["id"] ?? UUID().uuidString)
-                    let release = g["released"] as? String
-                    
-                    // Récupère la liste des noms de plateformes (PS5, Xbox, Switch, etc.)
-                    var platformNames: [String] = []
-                    if let plats = g["platforms"] as? [[String: Any]] {
-                        for p in plats {
-                            if let pObj = p["platform"] as? [String: Any], let pName = pObj["name"] as? String {
-                                platformNames.append(pName)
-                            }
-                        }
-                    }
-                    let platString = platformNames.prefix(4).joined(separator: ", ")
-                    
-                    items.append(GameSearchItem(
-                        id: gid,
-                        title: title,
-                        imageUrl: rawImage,
-                        releaseDate: release,
-                        platforms: platString.isEmpty ? nil : platString
+                        releaseDate: prettyDate
                     ))
                 }
                 self.results = items
@@ -1558,36 +1481,23 @@ struct EditGameSheet: View {
     }
 }
 
-// MARK: - Game Search Sheet (Nintendo & Multiplatform Database)
+// MARK: - Game Search Sheet (Nintendo Database)
 struct GameSearchSheet: View {
     @Binding var isPresented: Bool
-    let onSelect: (GameSearchItem) -> Void
+    let onSelect: (NintendoGameItem) -> Void
     
-    @StateObject private var searcher = UnifiedGameSearchService()
+    @StateObject private var searcher = NintendoSearchService()
     @State private var hoveredItemId: String? = nil
     
     var body: some View {
         VStack(spacing: 14) {
-            // Sélecteur de source de catalogue
-            Picker("", selection: $searcher.source) {
-                ForEach(SearchCatalogSource.allCases) { src in
-                    Text(src.label).tag(src)
-                }
-            }
-            .pickerStyle(.segmented)
-            .onChange(of: searcher.source) { _, _ in
-                if !searcher.query.trimmingCharacters(in: .whitespaces).isEmpty {
-                    searcher.performSearch(searcher.query)
-                }
-            }
-            
             // Header with search field
             HStack(spacing: 10) {
                 Image(systemName: "magnifyingglass")
                     .foregroundColor(.secondary)
                     .font(.system(size: 15))
                 
-                TextField(searcher.source == .nintendo ? L10n.tr("Search Nintendo eShop (Mario, Zelda...)", "Rechercher sur Nintendo eShop (Mario, Zelda...)") : L10n.tr("Search game (PlayStation, Xbox, PC...)", "Rechercher un jeu (PlayStation, Xbox, PC...)"), text: $searcher.query)
+                TextField(L10n.tr("Search game (e.g. Mario, Zelda...)", "Rechercher un jeu (ex: Mario, Zelda...)"), text: $searcher.query)
                     .textFieldStyle(.plain)
                     .font(.system(size: 14))
                     .onChange(of: searcher.query) { _, newQuery in
@@ -1630,7 +1540,7 @@ struct GameSearchSheet: View {
                         .foregroundColor(.secondary.opacity(0.4))
                     
                     if searcher.query.trimmingCharacters(in: .whitespaces).isEmpty {
-                        Text(L10n.tr("Type a game name to search across catalogs", "Tapez un nom de jeu pour explorer le catalogue"))
+                        Text(L10n.tr("Type a game name to search Nintendo catalog", "Tapez un nom de jeu pour explorer le catalogue"))
                             .font(.system(size: 13, weight: .medium))
                             .foregroundColor(.secondary)
                     } else if !searcher.isLoading {
@@ -1657,7 +1567,7 @@ struct GameSearchSheet: View {
                                                 .foregroundColor(.secondary)
                                         }
                                     }
-                                    .frame(width: 56, height: 56)
+                                    .frame(width: 52, height: 52)
                                     .cornerRadius(8)
                                     .clipped()
                                     
@@ -1667,18 +1577,10 @@ struct GameSearchSheet: View {
                                             .foregroundColor(.primary)
                                             .lineLimit(1)
                                         
-                                        HStack(spacing: 6) {
-                                            if let plat = item.platforms, !plat.isEmpty {
-                                                Text(plat)
-                                                    .font(.system(size: 10, weight: .medium))
-                                                    .foregroundColor(.accentColor)
-                                                    .lineLimit(1)
-                                            }
-                                            if let date = item.releaseDate, !date.isEmpty {
-                                                Text("• \(date)")
-                                                    .font(.system(size: 10))
-                                                    .foregroundColor(.secondary)
-                                            }
+                                        if let date = item.releaseDate, !date.isEmpty {
+                                            Text(date)
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.secondary)
                                         }
                                     }
                                     
@@ -1707,7 +1609,7 @@ struct GameSearchSheet: View {
             }
         }
         .padding(18)
-        .frame(width: 520, height: 470)
+        .frame(width: 500, height: 440)
     }
 }
 
