@@ -15,8 +15,8 @@ enum AppTheme: String, Codable, CaseIterable, Identifiable {
     var displayName: String {
         switch self {
         case .auto: return L10n.tr("Auto", "Automatique")
-        case .dark: return L10n.tr("Dark (Switch)", "Sombre (Switch)")
-        case .light: return L10n.tr("Light (Switch)", "Clair (Switch)")
+        case .dark: return L10n.tr("Dark", "Sombre")
+        case .light: return L10n.tr("Light", "Clair")
         }
     }
     
@@ -1812,8 +1812,10 @@ struct ManageSheet: View {
             } else {
                 // ONGLET 3 : RÉGLAGES DE L'APPLICATION
                 VStack(alignment: .leading, spacing: 14) {
-                    // APPARENCE & THÈME
-                    VStack(alignment: .leading, spacing: 8) {
+                    ScrollView(.vertical, showsIndicators: true) {
+                        VStack(alignment: .leading, spacing: 14) {
+                            // APPARENCE & THÈME
+                            VStack(alignment: .leading, spacing: 8) {
                         HStack {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(L10n.tr("Theme", "Thème"))
@@ -2026,11 +2028,12 @@ struct ManageSheet: View {
                             }
                         }
                     }
-                    .padding(14)
-                    .background(Color.primary.opacity(0.03))
-                    .cornerRadius(12)
-                    
-                    Spacer(minLength: 0)
+                            .padding(14)
+                            .background(Color.primary.opacity(0.03))
+                            .cornerRadius(12)
+                        }
+                        .padding(.trailing, 2)
+                    }
                     
                     HStack {
                         Spacer()
@@ -2041,7 +2044,7 @@ struct ManageSheet: View {
             }
         }
         .padding(20)
-        .frame(width: 500, height: 535)
+        .frame(width: 520, height: 640)
         .sheet(isPresented: $showSearchSheet) {
             GameSearchSheet(isPresented: $showSearchSheet) { selectedGame in
                 self.gameName = selectedGame.title
