@@ -616,11 +616,23 @@ class GameStore: ObservableObject {
             loadedGames = decoded
         }
         
-        if let la = loadedApps, !la.isEmpty {
+        let defaultApps = [
+            DiscordApp(name: "Nintendo Switch", clientId: "1560034774049882124"),
+            DiscordApp(name: "PlayStation", clientId: "1560228884736118806"),
+            DiscordApp(name: "Xbox", clientId: "1560229095256752171")
+        ]
+        
+        if var la = loadedApps, !la.isEmpty {
+            // S'assure que PlayStation et Xbox sont disponibles s'ils n'ont pas été ajoutés
+            for def in defaultApps {
+                if !la.contains(where: { $0.clientId == def.clientId }) {
+                    la.append(def)
+                }
+            }
             self.apps = la
         } else {
-            let defaultSwitch = DiscordApp(name: "Nintendo Switch", clientId: "1560034774049882124")
-            self.apps = [defaultSwitch]
+            self.apps = defaultApps
+            save()
         }
         
         if let lg = loadedGames {
