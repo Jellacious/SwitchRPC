@@ -300,7 +300,7 @@ struct DiscordCardPreview: View {
 // MARK: - GitHub Update Checker
 class UpdateChecker: ObservableObject {
     static let shared = UpdateChecker()
-    static let currentVersion = "1.0.0"
+    static let currentVersion = "1.1.0"
     static let repoOwner = "Jellacious"
     static let repoName = "SwitchRPC"
     
@@ -359,6 +359,97 @@ class UpdateChecker: ObservableObject {
                 } else {
                     self.state = .upToDate
                 }
+            }
+        }.resume()
+    }
+}
+
+// MARK: - Nintendo Search Service & Model
+struct NintendoGameItem: Identifiable, Hashable {
+    let id: String
+    let title: String
+    let imageUrl: String
+    let releaseDate: String?
+}
+
+class NintendoSearchService: ObservableObject {
+    @Published var query: String = ""
+    @Published var results: [NintendoGameItem] = []
+    @Published var isLoading: Bool = false
+    @Published var errorMessage: String? = nil
+    
+    private var searchWorkItem: DispatchWorkItem?
+    
+    func onQueryChanged(_ newQuery: String) {
+        searchWorkItem?.cancel()
+        let trimmed = newQuery.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            self.results = []
+            self.isLoading = false
+            self.errorMessage = nil
+            return
+        }
+        
+        let item = DispatchWorkItem { [weak self] in
+            self?.performSearch(trimmed)
+        }
+        searchWorkItem = item
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: item)
+    }
+    
+    func performSearch(_ text: String) {
+        guard let encoded = text.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) else { return }
+        let lang = L10n.lang == .french ? "fr" : "en"
+        let urlString = "https://searching.nintendo-europe.com/\(lang)/select?q=\(encoded)&fq=type:GAME%20AND%20system_type:nintendoswitch*&wt=json&rows=24"
+        guard let url = URL(string: urlString) else { return }
+        
+        DispatchQueue.main.async {
+            self.isLoading = true
+            self.errorMessage = nil
+        }
+        
+        var request = URLRequest(url: url)
+        request.setValue("Mozilla/5.0", forHTTPHeaderField: "User-Agent")
+        request.timeoutInterval = 8.0
+        
+        URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            DispatchQueue.main.async {
+                guard let self = self else { return }
+                self.isLoading = false
+                
+                if let error = error {
+                    self.errorMessage = error.localizedDescription
+                    return
+                }
+                
+                guard let data = data,
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      let responseObj = json["response"] as? [String: Any],
+                      let docs = responseObj["docs"] as? [[String: Any]] else {
+                    self.errorMessage = L10n.tr("No results found", "Aucun résultat trouvé")
+                    return
+                }
+                
+                var items: [NintendoGameItem] = []
+                for doc in docs {
+                    guard let title = doc["title"] as? String else { continue }
+                    let rawImage = (doc["image_url_sq_s"] as? String)
+                        ?? (doc["image_url_h2x1_s"] as? String)
+                        ?? (doc["image_url"] as? String)
+                        ?? ""
+                    
+                    let highRes = rawImage.replacingOccurrences(of: "_image500w.jpg", with: "_image800w.jpg")
+                    let fsId = (doc["fs_id"] as? String) ?? UUID().uuidString
+                    let prettyDate = doc["pretty_date_s"] as? String
+                    
+                    items.append(NintendoGameItem(
+                        id: fsId,
+                        title: title,
+                        imageUrl: highRes.isEmpty ? rawImage : highRes,
+                        releaseDate: prettyDate
+                    ))
+                }
+                self.results = items
             }
         }.resume()
     }
@@ -1138,11 +1229,32 @@ struct EditGameSheet: View {
     @State private var imageUrl: String = ""
     @State private var appId: UUID = UUID()
     @State private var activityType: ActivityType = .playing
+    @State private var showSearchSheet: Bool = false
     
     var body: some View {
         VStack(spacing: 16) {
             Text(L10n.tr("Edit Game", "Modifier le jeu"))
                 .font(.headline)
+            
+            // Bouton de recherche au-dessus de la preview
+            HStack {
+                Spacer()
+                Button(action: { showSearchSheet = true }) {
+                    HStack(spacing: 6) {
+                        Image(systemName: "magnifyingglass")
+                            .font(.system(size: 11, weight: .bold))
+                        Text(L10n.tr("Search game", "Rechercher un jeu"))
+                            .font(.system(size: 12, weight: .medium))
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 4)
+                    .background(Color.accentColor.opacity(0.12))
+                    .foregroundColor(.accentColor)
+                    .cornerRadius(8)
+                }
+                .buttonStyle(.plain)
+            }
+            .padding(.bottom, -6)
             
             // Live Preview Card
             let selectedAppName = store.getApp(for: appId)?.name ?? L10n.tr("Title", "Titre")
@@ -1221,6 +1333,12 @@ struct EditGameSheet: View {
         }
         .padding(20)
         .frame(width: 480)
+        .sheet(isPresented: $showSearchSheet) {
+            GameSearchSheet(isPresented: $showSearchSheet) { selectedGame in
+                self.name = selectedGame.title
+                self.imageUrl = selectedGame.imageUrl
+            }
+        }
         .onAppear {
             name = game.name
             status = game.status
@@ -1228,6 +1346,138 @@ struct EditGameSheet: View {
             appId = game.appId
             activityType = game.activityType
         }
+    }
+}
+
+// MARK: - Game Search Sheet (Nintendo Database)
+struct GameSearchSheet: View {
+    @Binding var isPresented: Bool
+    let onSelect: (NintendoGameItem) -> Void
+    
+    @StateObject private var searcher = NintendoSearchService()
+    @State private var hoveredItemId: String? = nil
+    
+    var body: some View {
+        VStack(spacing: 14) {
+            // Header with search field
+            HStack(spacing: 10) {
+                Image(systemName: "magnifyingglass")
+                    .foregroundColor(.secondary)
+                    .font(.system(size: 15))
+                
+                TextField(L10n.tr("Search game (e.g. Mario, Zelda...)", "Rechercher un jeu (ex: Mario, Zelda...)"), text: $searcher.query)
+                    .textFieldStyle(.plain)
+                    .font(.system(size: 14))
+                    .onChange(of: searcher.query) { _, newQuery in
+                        searcher.onQueryChanged(newQuery)
+                    }
+                
+                if !searcher.query.isEmpty {
+                    Button(action: {
+                        searcher.query = ""
+                        searcher.results = []
+                    }) {
+                        Image(systemName: "xmark.circle.fill")
+                            .foregroundColor(.secondary)
+                    }
+                    .buttonStyle(.plain)
+                }
+                
+                if searcher.isLoading {
+                    ProgressView()
+                        .scaleEffect(0.7)
+                        .frame(width: 16, height: 16)
+                }
+                
+                Button(L10n.tr("Close", "Fermer")) {
+                    isPresented = false
+                }
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(Color.primary.opacity(0.05))
+            .cornerRadius(10)
+            
+            // Results list or Empty State
+            if searcher.results.isEmpty {
+                VStack(spacing: 12) {
+                    Spacer()
+                    Image(systemName: "gamecontroller.fill")
+                        .font(.system(size: 38))
+                        .foregroundColor(.secondary.opacity(0.4))
+                    
+                    if searcher.query.trimmingCharacters(in: .whitespaces).isEmpty {
+                        Text(L10n.tr("Type a game name to search Nintendo catalog", "Tapez un nom de jeu pour explorer le catalogue"))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.secondary)
+                    } else if !searcher.isLoading {
+                        Text(L10n.tr("No games found for this search", "Aucun jeu trouvé pour cette recherche"))
+                            .font(.system(size: 13, weight: .medium))
+                            .foregroundColor(.secondary)
+                    }
+                    Spacer()
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 8) {
+                        ForEach(searcher.results) { item in
+                            Button(action: {
+                                onSelect(item)
+                                isPresented = false
+                            }) {
+                                HStack(spacing: 12) {
+                                    CachedAsyncImage(url: item.imageUrl) {
+                                        ZStack {
+                                            Color.primary.opacity(0.08)
+                                            Image(systemName: "gamecontroller")
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    .frame(width: 52, height: 52)
+                                    .cornerRadius(8)
+                                    .clipped()
+                                    
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(item.title)
+                                            .font(.system(size: 13, weight: .semibold))
+                                            .foregroundColor(.primary)
+                                            .lineLimit(1)
+                                        
+                                        if let date = item.releaseDate, !date.isEmpty {
+                                            Text(date)
+                                                .font(.system(size: 11))
+                                                .foregroundColor(.secondary)
+                                        }
+                                    }
+                                    
+                                    Spacer()
+                                    
+                                    Image(systemName: "plus.circle.fill")
+                                        .font(.system(size: 18))
+                                        .foregroundColor(hoveredItemId == item.id ? Color.accentColor : Color.secondary.opacity(0.5))
+                                }
+                                .padding(8)
+                                .background(hoveredItemId == item.id ? Color.accentColor.opacity(0.12) : Color.primary.opacity(0.03))
+                                .cornerRadius(10)
+                            }
+                            .buttonStyle(.plain)
+                            .onHover { isHover in
+                                if isHover {
+                                    hoveredItemId = item.id
+                                } else if hoveredItemId == item.id {
+                                    hoveredItemId = nil
+                                }
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+            }
+        }
+        .padding(18)
+        .frame(width: 500, height: 440)
     }
 }
 
@@ -1243,6 +1493,7 @@ struct ManageSheet: View {
     @State private var gameImageUrl: String = ""
     @State private var selectedAppId: UUID = UUID()
     @State private var activityType: ActivityType = .playing
+    @State private var showSearchSheet: Bool = false
     
     // Onglet 2 : Nouveau Titre
     @State private var appName: String = ""
@@ -1264,6 +1515,26 @@ struct ManageSheet: View {
             if selectedTab == 0 {
                 // ONGLET 1 : NOUVEAU JEU AVEC PREVIEW EN DIRECT
                 let selectedApp = store.getApp(for: selectedAppId)?.name ?? L10n.tr("Title", "Titre")
+                
+                // Bouton de recherche au-dessus de la preview
+                HStack {
+                    Spacer()
+                    Button(action: { showSearchSheet = true }) {
+                        HStack(spacing: 6) {
+                            Image(systemName: "magnifyingglass")
+                                .font(.system(size: 11, weight: .bold))
+                            Text(L10n.tr("Search game", "Rechercher un jeu"))
+                                .font(.system(size: 12, weight: .medium))
+                        }
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 4)
+                        .background(Color.accentColor.opacity(0.12))
+                        .foregroundColor(.accentColor)
+                        .cornerRadius(8)
+                    }
+                    .buttonStyle(.plain)
+                }
+                .padding(.bottom, -6)
                 
                 // Live Discord Preview Card
                 DiscordCardPreview(
@@ -1609,6 +1880,12 @@ struct ManageSheet: View {
         }
         .padding(20)
         .frame(width: 500, height: 535)
+        .sheet(isPresented: $showSearchSheet) {
+            GameSearchSheet(isPresented: $showSearchSheet) { selectedGame in
+                self.gameName = selectedGame.title
+                self.gameImageUrl = selectedGame.imageUrl
+            }
+        }
     }
 }
 
