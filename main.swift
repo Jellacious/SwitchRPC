@@ -434,18 +434,18 @@ class NintendoSearchService: ObservableObject {
                 for doc in docs {
                     guard let title = doc["title"] as? String else { continue }
                     let rawImage = (doc["image_url_sq_s"] as? String)
+                        ?? (doc["wishlist_email_square_image_url_s"] as? String)
                         ?? (doc["image_url_h2x1_s"] as? String)
                         ?? (doc["image_url"] as? String)
                         ?? ""
                     
-                    let highRes = rawImage.replacingOccurrences(of: "_image500w.jpg", with: "_image800w.jpg")
                     let fsId = (doc["fs_id"] as? String) ?? UUID().uuidString
                     let prettyDate = doc["pretty_date_s"] as? String
                     
                     items.append(NintendoGameItem(
                         id: fsId,
                         title: title,
-                        imageUrl: highRes.isEmpty ? rawImage : highRes,
+                        imageUrl: rawImage,
                         releaseDate: prettyDate
                     ))
                 }
