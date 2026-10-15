@@ -1019,77 +1019,17 @@ class AppState: ObservableObject {
     }
 }
 
-// MARK: - Drag & Drop Delegate for Game Cards
-struct GameDropDelegate: DropDelegate {
-    let item: SavedGame
-    let store: GameStore
-    @Binding var draggedItem: SavedGame?
-    @Binding var dropTargetItem: SavedGame?
-    @Binding var isTargetingTrailing: Bool
-    
-    func dropEntered(info: DropInfo) {
-        guard let dragged = draggedItem, dragged.id != item.id else {
-            dropTargetItem = nil
-            return
-        }
-        dropTargetItem = item
-    }
-    
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        guard let dragged = draggedItem, dragged.id != item.id else {
-            return DropProposal(operation: .cancel)
-        }
-        // Détecte si le curseur est dans la moitié droite ou gauche de la carte
-        let isRightHalf = info.location.x > 80
-        if isTargetingTrailing != isRightHalf {
-            isTargetingTrailing = isRightHalf
-        }
-        return DropProposal(operation: .move)
-    }
-    
-    func dropExited(info: DropInfo) {
-        if dropTargetItem?.id == item.id {
-            dropTargetItem = nil
-        }
-    }
-    
-    func performDrop(info: DropInfo) -> Bool {
-        guard let dragged = draggedItem,
-              dragged.id != item.id,
-              let from = store.games.firstIndex(of: dragged),
-              let to = store.games.firstIndex(of: item) else {
-            draggedItem = nil
-            dropTargetItem = nil
-            return false
-        }
-        
-        var targetIndex = isTargetingTrailing ? to + 1 : to
-        if from < targetIndex {
-            targetIndex -= 1
-        }
-        
-        withAnimation(.spring(response: 0.35, dampingFraction: 0.75)) {
-            let moved = store.games.remove(at: from)
-            let safeIndex = max(0, min(targetIndex, store.games.count))
-            store.games.insert(moved, at: safeIndex)
-        }
-        
-        store.save()
-        draggedItem = nil
-        dropTargetItem = nil
-        return true
-    }
-}
-
 // MARK: - Main Content View
 struct ContentView: View {
     @ObservedObject var state = AppState.shared
     @ObservedObject var store = AppState.shared.store
     @State private var showManageModal: Bool = false
     @State private var editingGame: SavedGame? = nil
+    
+    // Drag and Drop interactif
     @State private var draggedGame: SavedGame? = nil
-    @State private var dropTargetGame: SavedGame? = nil
-    @State private var isTargetingTrailing: Bool = false
+    @State private var dragTranslation: CGFloat = 0
+    @State private var dragInitialIndex: Int? = nil
     
     var body: some View {
         VStack(spacing: 0) {
@@ -1153,49 +1093,58 @@ struct ContentView: View {
                 HStack(alignment: .top, spacing: 20) {
                     ForEach(store.games) { game in
                         let app = store.getApp(for: game.appId)
-                        let isTarget = dropTargetGame?.id == game.id
+                        let isCurrentDragged = draggedGame?.id == game.id
                         
-                        HStack(spacing: 0) {
-                            // Indicateur de drop à gauche
-                            if isTarget && !isTargetingTrailing {
-                                Capsule()
-                                    .fill(Color.accentColor)
-                                    .frame(width: 4, height: 160)
-                                    .padding(.trailing, 8)
-                                    .transition(.scale.combined(with: .opacity))
-                            }
-                            
-                            GameCard(
-                                game: game,
-                                appName: app?.name ?? L10n.tr("Unknown", "Inconnu"),
-                                isSelected: state.currentGame?.id == game.id,
-                                isDragged: draggedGame?.id == game.id,
-                                onPlay: { state.selectGame(game) },
-                                onEdit: { editingGame = game },
-                                onDelete: { store.removeGame(game) }
-                            )
-                            .onDrag {
-                                self.draggedGame = game
-                                return NSItemProvider(object: game.id.uuidString as NSString)
-                            }
-                            .onDrop(of: [UTType.text], delegate: GameDropDelegate(
-                                item: game,
-                                store: store,
-                                draggedItem: $draggedGame,
-                                dropTargetItem: $dropTargetGame,
-                                isTargetingTrailing: $isTargetingTrailing
-                            ))
-                            
-                            // Indicateur de drop à droite
-                            if isTarget && isTargetingTrailing {
-                                Capsule()
-                                    .fill(Color.accentColor)
-                                    .frame(width: 4, height: 160)
-                                    .padding(.leading, 8)
-                                    .transition(.scale.combined(with: .opacity))
-                            }
-                        }
-                        .animation(.easeInOut(duration: 0.2), value: isTarget)
+                        GameCard(
+                            game: game,
+                            appName: app?.name ?? L10n.tr("Unknown", "Inconnu"),
+                            isSelected: state.currentGame?.id == game.id,
+                            isDragged: isCurrentDragged,
+                            onPlay: {
+                                if draggedGame == nil {
+                                    state.selectGame(game)
+                                }
+                            },
+                            onEdit: { editingGame = game },
+                            onDelete: { store.removeGame(game) }
+                        )
+                        .offset(x: isCurrentDragged ? dragTranslation : 0)
+                        .scaleEffect(isCurrentDragged ? 1.06 : 1.0)
+                        .shadow(color: isCurrentDragged ? Color.black.opacity(0.35) : Color.clear, radius: isCurrentDragged ? 14 : 0, y: isCurrentDragged ? 8 : 0)
+                        .zIndex(isCurrentDragged ? 999 : 1)
+                        .simultaneousGesture(
+                            DragGesture(minimumDistance: 8)
+                                .onChanged { value in
+                                    if draggedGame == nil {
+                                        draggedGame = game
+                                        dragInitialIndex = store.games.firstIndex(where: { $0.id == game.id })
+                                    }
+                                    dragTranslation = value.translation.width
+                                    
+                                    // Calcul dynamique des échanges pendant le glisser
+                                    guard let currentIndex = store.games.firstIndex(where: { $0.id == game.id }) else { return }
+                                    let cardWidthWithSpacing: CGFloat = 180 // 160 width + 20 spacing
+                                    let step = Int(round(dragTranslation / cardWidthWithSpacing))
+                                    let targetIndex = max(0, min(currentIndex + step, store.games.count - 1))
+                                    
+                                    if targetIndex != currentIndex {
+                                        withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
+                                            store.games.move(fromOffsets: IndexSet(integer: currentIndex), toOffset: targetIndex > currentIndex ? targetIndex + 1 : targetIndex)
+                                            dragTranslation -= CGFloat(targetIndex - currentIndex) * cardWidthWithSpacing
+                                        }
+                                    }
+                                }
+                                .onEnded { _ in
+                                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+                                        dragTranslation = 0
+                                    }
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
+                                        draggedGame = nil
+                                        dragInitialIndex = nil
+                                        store.save()
+                                    }
+                                }
+                        )
                     }
                     
                     // Add Card
