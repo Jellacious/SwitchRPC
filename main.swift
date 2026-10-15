@@ -2,6 +2,32 @@ import Cocoa
 import SwiftUI
 import Foundation
 import Combine
+import UniformTypeIdentifiers
+
+// MARK: - App Theme (Default: Auto)
+enum AppTheme: String, Codable, CaseIterable, Identifiable {
+    case auto = "auto"
+    case dark = "dark"
+    case light = "light"
+    
+    var id: String { self.rawValue }
+    
+    var displayName: String {
+        switch self {
+        case .auto: return L10n.tr("Auto", "Automatique")
+        case .dark: return L10n.tr("Dark (Switch)", "Sombre (Switch)")
+        case .light: return L10n.tr("Light (Switch)", "Clair (Switch)")
+        }
+    }
+    
+    var colorScheme: ColorScheme? {
+        switch self {
+        case .auto: return nil
+        case .dark: return .dark
+        case .light: return .light
+        }
+    }
+}
 
 // MARK: - Language Localization (Default: English)
 enum AppLanguage: String, Codable, CaseIterable, Identifiable {
@@ -230,6 +256,7 @@ struct DiscordCardPreview: View {
     let details: String
     let state: String
     let imageUrl: String
+    var showElapsedTime: Bool = true
     
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -273,14 +300,16 @@ struct DiscordCardPreview: View {
                         .foregroundColor(Color(white: 0.7))
                         .lineLimit(1)
                     
-                    HStack(spacing: 4) {
-                        Image(systemName: "gamecontroller.fill")
-                            .font(.system(size: 9))
-                        Text("0:08")
-                            .font(.system(size: 11))
+                    if showElapsedTime {
+                        HStack(spacing: 4) {
+                            Image(systemName: "gamecontroller.fill")
+                                .font(.system(size: 9))
+                            Text("0:08")
+                                .font(.system(size: 11))
+                        }
+                        .foregroundColor(Color(red: 0.25, green: 0.8, blue: 0.45))
+                        .padding(.top, 1)
                     }
-                    .foregroundColor(Color(red: 0.25, green: 0.8, blue: 0.45))
-                    .padding(.top, 1)
                 }
                 Spacer()
             }
@@ -496,6 +525,29 @@ struct AppSettings: Codable {
     var launchAtLogin: Bool = false
     var enableMenuBar: Bool = true
     var language: AppLanguage = .english
+    var theme: AppTheme = .auto
+    var showElapsedTime: Bool = true
+    
+    enum CodingKeys: String, CodingKey {
+        case launchAtLogin, enableMenuBar, language, theme, showElapsedTime
+    }
+    
+    init(launchAtLogin: Bool = false, enableMenuBar: Bool = true, language: AppLanguage = .english, theme: AppTheme = .auto, showElapsedTime: Bool = true) {
+        self.launchAtLogin = launchAtLogin
+        self.enableMenuBar = enableMenuBar
+        self.language = language
+        self.theme = theme
+        self.showElapsedTime = showElapsedTime
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        launchAtLogin = (try? container.decode(Bool.self, forKey: .launchAtLogin)) ?? false
+        enableMenuBar = (try? container.decode(Bool.self, forKey: .enableMenuBar)) ?? true
+        language = (try? container.decode(AppLanguage.self, forKey: .language)) ?? .english
+        theme = (try? container.decode(AppTheme.self, forKey: .theme)) ?? .auto
+        showElapsedTime = (try? container.decode(Bool.self, forKey: .showElapsedTime)) ?? true
+    }
 }
 
 // MARK: - Persistence Manager
@@ -630,6 +682,16 @@ class GameStore: ObservableObject {
             ImageLoader.deleteLocalCover(for: game.imageUrl)
         }
         games.removeAll { $0.id == game.id }
+        save()
+    }
+    
+    func moveGame(from sourceId: UUID, to destinationId: UUID) {
+        guard sourceId != destinationId,
+              let fromIndex = games.firstIndex(where: { $0.id == sourceId }),
+              let toIndex = games.firstIndex(where: { $0.id == destinationId }) else { return }
+        
+        let moved = games.remove(at: fromIndex)
+        games.insert(moved, at: toIndex)
         save()
     }
     
@@ -772,9 +834,12 @@ class DiscordIPC {
             
             var activityDict: [String: Any] = [
                 "type": game.activityType.rawValue,
-                "details": cleanDetails,
-                "timestamps": ["start": startTime]
+                "details": cleanDetails
             ]
+            
+            if AppState.shared.store.settings.showElapsedTime {
+                activityDict["timestamps"] = ["start": startTime]
+            }
             
             var cleanStatus = sanitizeString(game.status, maxLength: 128)
             if cleanStatus.isEmpty {
@@ -954,12 +1019,41 @@ class AppState: ObservableObject {
     }
 }
 
+// MARK: - Drag & Drop Delegate for Game Cards
+struct GameDropDelegate: DropDelegate {
+    let item: SavedGame
+    let store: GameStore
+    @Binding var draggedItem: SavedGame?
+    
+    func dropEntered(info: DropInfo) {
+        guard let dragged = draggedItem,
+              dragged.id != item.id,
+              let from = store.games.firstIndex(of: dragged),
+              let to = store.games.firstIndex(of: item) else { return }
+        
+        withAnimation(.default) {
+            store.games.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
+        }
+    }
+    
+    func dropUpdated(info: DropInfo) -> DropProposal? {
+        return DropProposal(operation: .move)
+    }
+    
+    func performDrop(info: DropInfo) -> Bool {
+        store.save()
+        draggedItem = nil
+        return true
+    }
+}
+
 // MARK: - Main Content View
 struct ContentView: View {
     @ObservedObject var state = AppState.shared
     @ObservedObject var store = AppState.shared.store
     @State private var showManageModal: Bool = false
     @State private var editingGame: SavedGame? = nil
+    @State private var draggedGame: SavedGame? = nil
     
     var body: some View {
         VStack(spacing: 0) {
@@ -1027,10 +1121,16 @@ struct ContentView: View {
                             game: game,
                             appName: app?.name ?? L10n.tr("Unknown", "Inconnu"),
                             isSelected: state.currentGame?.id == game.id,
+                            isDragged: draggedGame?.id == game.id,
                             onPlay: { state.selectGame(game) },
                             onEdit: { editingGame = game },
                             onDelete: { store.removeGame(game) }
                         )
+                        .onDrag {
+                            self.draggedGame = game
+                            return NSItemProvider(object: game.id.uuidString as NSString)
+                        }
+                        .onDrop(of: [UTType.text], delegate: GameDropDelegate(item: game, store: store, draggedItem: $draggedGame))
                     }
                     
                     // Add Card
@@ -1073,7 +1173,7 @@ struct ContentView: View {
             
             // Footer Info
             HStack {
-                Text(store.games.isEmpty ? L10n.tr("Click '+' to add your first game cover", "Cliquez sur '+' pour ajouter votre première jaquette") : L10n.tr("Click a cover to launch • Pencil icon to edit", "Clique sur une pochette pour lancer • Icône crayon pour modifier"))
+                Text(store.games.isEmpty ? L10n.tr("Click '+' to add your first game cover", "Cliquez sur '+' pour ajouter votre première jaquette") : L10n.tr("Drag to reorder • Click to launch • Pencil to edit", "Glisser-déposer pour réorganiser • Cliquer pour lancer • Crayon pour modifier"))
                     .font(.caption)
                     .foregroundColor(.secondary)
                 Spacer()
@@ -1086,8 +1186,10 @@ struct ContentView: View {
         }
         .frame(width: 800, height: 415)
         .background(Color(NSColor.windowBackgroundColor))
+        .preferredColorScheme(store.settings.theme.colorScheme)
         .sheet(isPresented: $showManageModal) {
             ManageSheet(store: store, isPresented: $showManageModal)
+                .preferredColorScheme(store.settings.theme.colorScheme)
         }
         .sheet(item: $editingGame) { game in
             EditGameSheet(game: game, store: store, onDone: { updated in
@@ -1099,6 +1201,7 @@ struct ContentView: View {
             }, onCancel: {
                 editingGame = nil
             })
+            .preferredColorScheme(store.settings.theme.colorScheme)
         }
     }
 }
@@ -1108,6 +1211,7 @@ struct GameCard: View {
     let game: SavedGame
     let appName: String
     let isSelected: Bool
+    var isDragged: Bool = false
     let onPlay: () -> Void
     let onEdit: () -> Void
     let onDelete: () -> Void
@@ -1131,6 +1235,7 @@ struct GameCard: View {
                         .stroke(isSelected ? Color(red: 0.2, green: 0.8, blue: 0.3) : (isHovered ? Color.accentColor : Color.clear), lineWidth: 3.5)
                 )
                 .shadow(color: isSelected ? Color.green.opacity(0.3) : Color.black.opacity(0.12), radius: isSelected ? 8 : 4, y: 3)
+                .opacity(isDragged ? 0.35 : 1.0)
                 
                 if isSelected {
                     Text(L10n.tr("PLAYING", "EN COURS"))
@@ -1263,7 +1368,8 @@ struct EditGameSheet: View {
                 appName: selectedAppName,
                 details: name,
                 state: status,
-                imageUrl: imageUrl
+                imageUrl: imageUrl,
+                showElapsedTime: store.settings.showElapsedTime
             )
             
             HStack(spacing: 12) {
@@ -1542,7 +1648,8 @@ struct ManageSheet: View {
                     appName: selectedApp,
                     details: gameName,
                     state: gameStatus,
-                    imageUrl: gameImageUrl
+                    imageUrl: gameImageUrl,
+                    showElapsedTime: store.settings.showElapsedTime
                 )
                 
                 VStack(alignment: .leading, spacing: 10) {
@@ -1705,6 +1812,38 @@ struct ManageSheet: View {
             } else {
                 // ONGLET 3 : RÉGLAGES DE L'APPLICATION
                 VStack(alignment: .leading, spacing: 14) {
+                    // APPARENCE & THÈME
+                    VStack(alignment: .leading, spacing: 8) {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.tr("Theme", "Thème"))
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(.primary)
+                                Text(L10n.tr("Switch between Light, Dark or System theme", "Choisissez le thème Clair, Sombre ou Automatique"))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            Spacer()
+                            Picker("", selection: Binding(
+                                get: { store.settings.theme },
+                                set: { newTheme in
+                                    var s = store.settings
+                                    s.theme = newTheme
+                                    store.updateSettings(s)
+                                }
+                            )) {
+                                ForEach(AppTheme.allCases) { th in
+                                    Text(th.displayName).tag(th)
+                                }
+                            }
+                            .labelsHidden()
+                            .frame(width: 150)
+                        }
+                    }
+                    .padding(12)
+                    .background(Color.primary.opacity(0.03))
+                    .cornerRadius(12)
+                    
                     // SÉLECTEUR DE LANGUE
                     VStack(alignment: .leading, spacing: 8) {
                         HStack {
@@ -1725,7 +1864,7 @@ struct ManageSheet: View {
                                 }
                             }
                             .labelsHidden()
-                            .frame(width: 130)
+                            .frame(width: 150)
                         }
                     }
                     .padding(12)
@@ -1733,9 +1872,32 @@ struct ManageSheet: View {
                     .cornerRadius(12)
                     
                     VStack(alignment: .leading, spacing: 12) {
-                        Text(L10n.tr("System Behavior", "Comportement système"))
+                        Text(L10n.tr("System & Discord Behavior", "Comportement système & Discord"))
                             .font(.system(size: 13, weight: .bold))
                             .foregroundColor(.primary)
+                        
+                        Toggle(isOn: Binding(
+                            get: { store.settings.showElapsedTime },
+                            set: { val in
+                                var s = store.settings
+                                s.showElapsedTime = val
+                                store.updateSettings(s)
+                                if let curr = AppState.shared.currentGame {
+                                    AppState.shared.selectGame(curr)
+                                }
+                            }
+                        )) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(L10n.tr("Show elapsed time on Discord", "Afficher le temps écoulé sur Discord"))
+                                    .font(.system(size: 13, weight: .medium))
+                                Text(L10n.tr("Displays the elapsed playing timer (e.g. 01:23 elapsed) on your Discord profile.", "Affiche le chronomètre de session écoulée (ex : 01:23 écoulé) sur votre profil Discord."))
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                        
+                        Divider()
                         
                         Toggle(isOn: Binding(
                             get: { store.settings.launchAtLogin },
