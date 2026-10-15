@@ -37,7 +37,10 @@ git clone https://github.com/Jellacious/SwitchRPC.git
 cd SwitchRPC
 
 # Compile binary
-swiftc -O main.swift -o SwitchRPC
+swiftc -O Sources/Models/*.swift Sources/Services/*.swift Sources/Views/*.swift Sources/main.swift -o SwitchRPC
+
+# Or build the DMG installer
+./build-dmg.sh
 
 # Run application
 ./SwitchRPC
